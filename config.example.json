@@ -15,20 +15,22 @@
 
   "notify": {
     "always_notify": false,
-    "notify_non_zhejiang": true
+    "notify_non_focus": true
   },
 
   "watch": {
-    "province_keywords": ["浙江"],
+    "list_url": "https://www.zjzs.net/col/col62/index.html",
+    "column_name": "中小学教师资格认定及定期注册",
+    "focus_keywords": ["教师资格认定"],
     "extra_keywords": [],
-    "max_pages": 80,
-    "list_passes": 2,
-    "digest_pages": 2,
+    "digest_new": true,
+    "digest_max": 10,
     "removal_confirm_days": 7,
-    "page_delay": 0.3,
+    "page_delay": 0.5,
     "timeout": 30,
     "retries": 3,
-    "retry_delay": 3
+    "retry_delay": 3,
+    "allow_insecure_ssl": true
   },
 
   "report": {
