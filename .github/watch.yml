@@ -1,0 +1,114 @@
+name: 教师资格网通知公告监控
+
+on:
+  schedule:
+    # cron 用的是 UTC。01:00 UTC = 09:00 北京时间（中国全年不实行夏令时）。
+    # 注意：GitHub 的定时任务在高峰期可能延迟几分钟到几十分钟，不是精确闹钟。
+    - cron: "0 1 * * *"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "强制推送一次（用来测试微信通道是否配好）"
+        type: boolean
+        default: false
+      baseline:
+        description: "重建基线（把当前状态当作已知，不报警）"
+        type: boolean
+        default: false
+
+# 需要写回仓库里的 state/ 和 reports/，所以要 contents: write
+permissions:
+  contents: write
+
+# 同一时间只跑一个，避免两个任务抢着提交快照
+concurrency:
+  group: jszg-watch
+  cancel-in-progress: false
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      # 关键：checkout 到 workspace 子目录。
+      # 脚本里的 JSZG_DATA_DIR 指向它，所以 state/ 和 reports/ 会落到这个仓库目录里，
+      # 后面的提交步骤直接在这里 git commit。
+      - name: 拉取仓库
+        uses: actions/checkout@v4
+        with:
+          path: workspace
+          fetch-depth: 1
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # 不需要 pip install：脚本只用标准库
+      - name: 生成临时配置（把 Secrets 写进工作区，不提交）
+        working-directory: workspace
+        env:
+          SERVERCHAN_SENDKEY: ${{ secrets.SERVERCHAN_SENDKEY }}
+          PUSHPLUS_TOKEN: ${{ secrets.PUSHPLUS_TOKEN }}
+        run: |
+          python - <<'PY'
+          import json, os, pathlib
+
+          cfg = json.loads(pathlib.Path("config.example.json").read_text(encoding="utf-8"))
+          cfg.pop("_说明", None)
+
+          sc = (os.environ.get("SERVERCHAN_SENDKEY") or "").strip()
+          pp = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
+          cfg["channels"]["serverchan"] = (
+              {"enabled": True, "sendkey": sc} if sc else {"enabled": False, "sendkey": ""}
+          )
+          cfg["channels"]["pushplus"] = (
+              {"enabled": True, "token": pp} if pp else {"enabled": False, "token": ""}
+          )
+
+          pathlib.Path("config.json").write_text(
+              json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
+          )
+          print("已生成 config.json：serverchan=%s, pushplus=%s" % (bool(sc), bool(pp)))
+          PY
+
+      - name: 自检（配置 / 网络 / 栏目）
+        working-directory: workspace
+        env:
+          JSZG_DATA_DIR: ${{ github.workspace }}/workspace
+        run: python jszg_watch.py --self-test
+
+      - name: 抓取并对比
+        working-directory: workspace
+        env:
+          JSZG_DATA_DIR: ${{ github.workspace }}/workspace
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
+        run: |
+          ARGS=""
+          if [ "${{ inputs.force }}" = "true" ]; then ARGS="$ARGS --force"; fi
+          if [ "${{ inputs.baseline }}" = "true" ]; then ARGS="$ARGS --baseline"; fi
+          echo "运行参数：$ARGS"
+          python jszg_watch.py $ARGS
+
+      - name: 写回快照与报告
+        working-directory: workspace
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # 含密钥的 config.json 绝不提交（万一以前被误提交过，这里也一并取消跟踪）
+          git rm --cached -q config.json 2>/dev/null || true
+          rm -f config.json
+
+          git add state reports 2>/dev/null || true
+
+          if git diff --cached --quiet; then
+            echo "快照与报告没有变化，无需提交。"
+            exit 0
+          fi
+
+          git commit -m "chore(state): 更新通知公告快照 $(date -u '+%Y-%m-%d %H:%M UTC')"
+          # 极少情况下远端已更新，重试一次
+          git push || (git pull --rebase --autostash && git push)
