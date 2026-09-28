@@ -1,0 +1,37 @@
+{
+  "_说明": "这是模板：复制成 config.json 后在本地用；GitHub Actions 上不要提交 config.json，改用仓库 Secrets（见 README）。",
+  "enabled": true,
+
+  "channels": {
+    "serverchan": {
+      "enabled": false,
+      "sendkey": "SERVERCHAN_SENDKEY_HERE"
+    },
+    "pushplus": {
+      "enabled": false,
+      "token": "PUSHPLUS_TOKEN_HERE"
+    }
+  },
+
+  "notify": {
+    "always_notify": false,
+    "notify_non_zhejiang": true
+  },
+
+  "watch": {
+    "province_keywords": ["浙江"],
+    "extra_keywords": [],
+    "max_pages": 80,
+    "list_passes": 2,
+    "digest_pages": 2,
+    "removal_confirm_days": 7,
+    "page_delay": 0.3,
+    "timeout": 30,
+    "retries": 3,
+    "retry_delay": 3
+  },
+
+  "report": {
+    "keep_last": 120
+  }
+}
