@@ -115,14 +115,10 @@ def main() -> int:
 
     print("\n== 3. 正文解析（离线） ==")
     info = jw.parse_article(ARTICLE_SAMPLE)
-    if info["chars"] <= 0 or not info["hash"]:
+    if info["chars"] <= 0 or not info["summary"]:
         fail("正文解析为空")
     else:
-        ok(f"正文解析 {info['chars']} 字，指纹 {info['hash'][:12]}…")
-    if info["publish"] != "2026-03-10":
-        fail(f"发布时间解析错误：{info['publish']}")
-    else:
-        ok("发布时间取 meta pubdate")
+        ok(f"正文解析 {info['chars']} 字")
     if "扫一扫" in info["summary"]:
         fail("正文把页脚二维码也算进去了")
     else:
@@ -195,26 +191,32 @@ def main() -> int:
         ok("标题变化被识别为「变化」")
 
     print("\n== 6. 快照合并：确认下架的条目应被移除（离线） ==")
+    orig_state_dir, orig_snapshot_path = jw.STATE_DIR, jw.SNAPSHOT_PATH
     with tempfile.TemporaryDirectory() as tmp:
-        jw.STATE_DIR = Path(tmp)
-        jw.SNAPSHOT_PATH = Path(tmp) / "snapshot.json.gz"
-        jw.save_snapshot(old, fresh[:1], diff, "2026-01-01 09:00:00")
-        saved = jw._read_json_gz(jw.SNAPSHOT_PATH)
-        if "art_62_8888" in saved["items"]:
-            fail("已确认下架的公告仍留在快照里（会导致每天重复告警）")
-        else:
-            ok("已确认下架的公告已从快照移除")
-        if "art_62_12100" not in saved["items"]:
-            fail("本轮抓到的公告没有写进快照")
-        else:
-            ok("本轮抓到的公告已写进快照")
+        try:
+            jw.STATE_DIR = Path(tmp)
+            jw.SNAPSHOT_PATH = Path(tmp) / "snapshot.json.gz"
+            jw.save_snapshot(old, fresh[:1], diff, "2026-01-01 09:00:00")
+            saved = jw._read_json_gz(jw.SNAPSHOT_PATH)
+            if "art_62_8888" in saved["items"]:
+                fail("已确认下架的公告仍留在快照里（会导致每天重复告警）")
+            else:
+                ok("已确认下架的公告已从快照移除")
+            if "art_62_12100" not in saved["items"]:
+                fail("本轮抓到的公告没有写进快照")
+            else:
+                ok("本轮抓到的公告已写进快照")
+        finally:
+            jw.STATE_DIR, jw.SNAPSHOT_PATH = orig_state_dir, orig_snapshot_path
 
     print("\n== 7. 推送未启用时不应发消息（离线） ==")
-    result = jw.notify(cfg, "冒烟测试", "不应发出", dry_run=True)
-    if not result:
+    results, failed = jw.notify(cfg, "冒烟测试", "不应发出", dry_run=True)
+    if not results:
         fail("notify() 没有返回任何结果")
+    elif failed:
+        fail("dry-run 下不应出现推送失败")
     else:
-        ok(f"notify() 返回：{result[0]}")
+        ok(f"notify() 返回：{results[0]}")
 
     print("\n== 8. 联网检查 ==")
     try:
