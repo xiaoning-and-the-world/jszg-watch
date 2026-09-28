@@ -16,7 +16,7 @@ jszg_watch.py  —  浙江省教育考试院「中小学教师资格认定及定
     1. 抓取 col62 列表页（公告数据内嵌在该页的 <record><![CDATA[...]]> 里）
     2. 以「文章 ID」为唯一标识与本地快照 state/snapshot.json.gz 对比，输出：
          新增 / 标题变化 / 下架 / 重新出现
-    3. 只对「本次新增」的公告抓取正文（正文监控），生成摘要供报告与推送使用；
+    3. 只对「本次新增」的公告抓取正文（正文监控），正文摘要写进 Markdown/HTML 报告；
        历史公告的正文不再重复抓取，也不检测历史公告的正文改动
     4. 生成 Markdown + HTML 报告到 reports/（latest.md / latest.html 为最新一份）
     5. 通过 Server酱 或 PushPlus 把摘要推送到微信
@@ -72,16 +72,19 @@ BASE_DIR = Path(os.environ.get("JSZG_DATA_DIR") or Path(__file__).resolve().pare
 CONFIG_PATH = Path(os.environ.get("JSZG_CONFIG") or (BASE_DIR / "config.json"))
 STATE_DIR = BASE_DIR / "state"
 SNAPSHOT_PATH = STATE_DIR / "snapshot.json.gz"
-PARTIAL_PATH = STATE_DIR / "partial.json.gz"
 REPORT_DIR = BASE_DIR / "reports"
 LOG_DIR = BASE_DIR / "logs"
 LOG_PATH = LOG_DIR / "run.log"
+MAX_LOG_BYTES = 1_000_000    # 本地 run.log 超过约 1 MB 就截断
+MAX_LOG_KEEP = 200_000       # 截断后保留尾部约 200 KB
+LOG_TRUNCATED_NOTE = "……（较早的日志已截断）……\n"
 
 IS_CI = bool(os.environ.get("CI")) or bool(os.environ.get("GITHUB_ACTIONS"))
 
 SITE = "https://www.zjzs.net"
 LIST_URL = f"{SITE}/col/col62/index.html"
 COLUMN_NAME = "中小学教师资格认定及定期注册"
+MONITOR_NAME = "浙江教师资格认定公告监控"   # 用于微信推送标题前缀、工作流显示名
 
 UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -152,6 +155,10 @@ def log(msg: str) -> None:
         return  # CI 里日志看 Actions 输出就够了，不往仓库写文件
     try:
         LOG_DIR.mkdir(parents=True, exist_ok=True)
+        if LOG_PATH.exists() and LOG_PATH.stat().st_size > MAX_LOG_BYTES:
+            # 本地长期运行：超过上限就把旧内容截掉，只保留尾部
+            tail = LOG_PATH.read_text(encoding="utf-8", errors="replace")[-MAX_LOG_KEEP:]
+            LOG_PATH.write_text(LOG_TRUNCATED_NOTE + tail, encoding="utf-8")
         with LOG_PATH.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
     except Exception:
@@ -203,14 +210,57 @@ def load_config() -> dict:
     return cfg
 
 
-def matches_keywords(title: str, keywords: list[str]) -> bool:
-    """标题命中任意一个关键词即返回 True。"""
-    return any(k and k in (title or "") for k in (keywords or []))
+def site_of(url: str) -> str:
+    """从 URL 取回 scheme://netloc，用于判断「监控目标是否换了站点」。"""
+    parts = urllib.parse.urlsplit(url or "")
+    if parts.scheme and parts.netloc:
+        return f"{parts.scheme}://{parts.netloc}"
+    return (url or "").rstrip("/")
+
+
+def _as_list(value) -> list[str]:
+    """把配置项容错地转成字符串列表：字符串当单元素，非法类型忽略。
+
+    这样即使 config.json 里把 focus_keywords 写成 "教师资格认定"（字符串而非数组），
+    也不会被逐字迭代成"教/师/资/格/认/定"而把几乎每条公告都判成重点。
+    """
+    if isinstance(value, str):
+        return [value] if value.strip() else []
+    if isinstance(value, (list, tuple)):
+        return [str(v) for v in value if str(v).strip()]
+    return []
+
+
+def matches_keywords(title: str, keywords) -> bool:
+    """标题命中任意一个关键词即返回 True（对字符串型误配也安全）。"""
+    return any(k in (title or "") for k in _as_list(keywords))
 
 
 def _int_or_none(text: str, pattern: str):
     m = re.search(pattern, text or "")
     return int(m.group(1)) if m else None
+
+
+def _as_int(value, default: int) -> int:
+    """容错地把配置值转成 int：缺省静默用默认值，类型错误则告警并回退。"""
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        log(f"警告：配置项应为整数，实际为 {value!r}，改用默认值 {default}")
+        return default
+
+
+def _as_float(value, default: float) -> float:
+    """容错地把配置值转成 float：缺省静默用默认值，类型错误则告警并回退。"""
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        log(f"警告：配置项应为数字，实际为 {value!r}，改用默认值 {default}")
+        return default
 
 
 # --------------------------------------------------------------------------
@@ -250,9 +300,9 @@ def http_get(url: str, cfg: dict) -> str:
     """带重试的 GET。证书校验失败时（且允许）自动降级为宽松校验重试。"""
     global _SSL_INSECURE, _SSL_WARNED
     watch = cfg["watch"]
-    retries = max(1, int(watch.get("retries") or 1))
-    timeout = float(watch.get("timeout") or 30)
-    retry_delay = float(watch.get("retry_delay") or 3)
+    retries = max(1, _as_int(watch.get("retries"), 1))
+    timeout = _as_float(watch.get("timeout"), 30)
+    retry_delay = _as_float(watch.get("retry_delay"), 3)
     allow_insecure = bool(watch.get("allow_insecure_ssl", True))
 
     insecure = _SSL_INSECURE
@@ -319,8 +369,7 @@ DATE_RE = re.compile(r'class="zjhz-tabcut-content-titme"\s*>([\d-]{6,12})<', re.
 ART_ID_RE = re.compile(r"art_(\d+)_(\d+)\.html", re.I)
 PROXY_RE = re.compile(r'href="(/module/web/jpage/dataproxy\.jsp\?[^"]+)"', re.I)
 
-# 详情页
-META_RE = r'<meta\s+name="{name}"\s+content="([^"]*)"'
+# 详情页：正文主体所在容器（取到二维码块或 </body> 为止）
 BODY_RE = re.compile(
     r'<div class="zjhz-article-main_section">(.*?)(?:<div class="zjhz-artic_qr-code|</body>)',
     re.S | re.I,
@@ -338,10 +387,11 @@ def article_id(href: str) -> str:
     return hashlib.sha1((href or "").encode("utf-8")).hexdigest()[:16]
 
 
-def parse_list(page_html: str) -> list[dict]:
+def parse_list(page_html: str, base_url: str = SITE) -> list[dict]:
     """从列表页 HTML 中解析出公告条目（标题 / 日期 / 链接）。"""
     items: list[dict] = []
     seen: set[str] = set()
+    base = base_url.rstrip("/") + "/"
     for body in RECORD_RE.findall(page_html):
         m = HREF_RE.search(body)
         if not m:
@@ -368,29 +418,19 @@ def parse_list(page_html: str) -> list[dict]:
             "id": aid,
             "title": title,
             "date": date,
-            "url": urllib.parse.urljoin(SITE + "/", href.split("?")[0]),
-            "detail_url": urllib.parse.urljoin(SITE + "/", href),
+            "url": urllib.parse.urljoin(base, href.split("?")[0]),
+            "detail_url": urllib.parse.urljoin(base, href),
         })
     return items
 
 
 def parse_article(page_html: str) -> dict:
-    """从详情页解析正文指纹与摘要。只保留正文主体，避免把导航/浏览量算进指纹。"""
-    def meta(name: str) -> str:
-        m = re.search(META_RE.format(name=name), page_html, re.I)
-        return html.unescape(m.group(1)).strip() if m else ""
-
+    """从详情页解析正文摘要（只保留正文主体，排除导航/浏览量/二维码）。"""
     m = BODY_RE.search(page_html)
-    body_html = m.group(1) if m else ""
-    text = strip_tags(body_html)
-
-    publish = meta("pubdate")[:10]
+    text = strip_tags(m.group(1) if m else "")
     return {
-        "hash": hashlib.sha256(text.encode("utf-8")).hexdigest() if text else "",
         "chars": len(text),
         "summary": text[:500],
-        "publish": publish,
-        "article_title": meta("ArticleTitle"),
     }
 
 
@@ -409,15 +449,21 @@ def fetch_list(cfg: dict) -> tuple[list[dict], bool]:
     watch = cfg["watch"]
     url = watch.get("list_url") or LIST_URL
     name = watch.get("column_name") or COLUMN_NAME
-    page_delay = float(watch.get("page_delay") or 0.5)
+    page_delay = _as_float(watch.get("page_delay"), 0.5)
+    origin = site_of(url)  # 翻页基址跟随配置，而不是写死某一站点
 
     page_html = http_get(url, cfg)
-    items = parse_list(page_html)
+    items = parse_list(page_html, origin)
     by_id = {it["id"]: it for it in items}
 
     total = _int_or_none(page_html, r"totalRecord:(\d+)")
     per_page = _int_or_none(page_html, r"perPage:(\d+)")
     complete = True
+    if total is None:
+        # 拿不到 totalRecord 就无法确认是否抓全；按「不完整」处理，
+        # 以免站点半改版时把没抓到的公告误判成下架
+        log(f"警告：{name} 未能解析 totalRecord，无法确认条目是否抓全，本轮按「不完整」处理")
+        complete = False
 
     if total and per_page and total > len(by_id):
         pages = (total + per_page - 1) // per_page
@@ -427,14 +473,14 @@ def fetch_list(cfg: dict) -> tuple[list[dict], bool]:
             complete = False
         else:
             for page in range(1, pages):
-                purl = SITE + re.sub(r"page=\d+", f"page={page}", html.unescape(proxy.group(1)))
+                purl = origin + re.sub(r"page=\d+", f"page={page}", html.unescape(proxy.group(1)))
                 try:
                     extra_html = http_get(purl, cfg)
                 except Exception as exc:  # noqa: BLE001
                     log(f"警告：{name} 第 {page + 1} 页抓取失败（{exc}）")
                     complete = False
                     break
-                got = parse_list(extra_html)
+                got = parse_list(extra_html, origin)
                 new_ones = [g for g in got if g["id"] not in by_id]
                 if not new_ones:
                     complete = False
@@ -461,12 +507,12 @@ def digest_items(items: list[dict], target_ids: set[str], cfg: dict) -> None:
     watch = cfg["watch"]
     if not watch.get("digest_new", True) or not target_ids:
         return
-    limit = max(0, int(watch.get("digest_max") or 0))
+    limit = max(0, _as_int(watch.get("digest_max"), 0))
     targets = [it for it in items if it["id"] in target_ids][:limit] if limit else []
     if not targets:
         return
 
-    page_delay = float(watch.get("page_delay") or 0.5)
+    page_delay = _as_float(watch.get("page_delay"), 0.5)
     log(f"需要抓取正文的新增公告：{len(targets)} 条")
     for idx, it in enumerate(targets, 1):
         try:
@@ -504,7 +550,7 @@ def diff_snapshots(old: dict, items: list[dict], cfg: dict, complete: bool) -> d
     """
     old_items = (old or {}).get("items") or {}
     removed_ids = set(old.get("removed_ids") or [])
-    confirm_days = max(1, int(cfg["watch"].get("removal_confirm_days") or 7))
+    confirm_days = max(1, _as_int(cfg["watch"].get("removal_confirm_days"), 7))
     today = now_cst().strftime("%Y-%m-%d")
 
     new_map = {it["id"]: it for it in items}
@@ -555,7 +601,7 @@ def diff_snapshots(old: dict, items: list[dict], cfg: dict, complete: bool) -> d
 
 
 def split_by_focus(items: list[dict], cfg: dict) -> tuple[list[dict], list[dict]]:
-    kws = cfg["watch"].get("focus_keywords") or []
+    kws = _as_list(cfg["watch"].get("focus_keywords"))
     hit = [i for i in items if matches_keywords(i.get("title", ""), kws)]
     other = [i for i in items if not matches_keywords(i.get("title", ""), kws)]
     return hit, other
@@ -790,8 +836,15 @@ PROVIDERS = [
 ]
 
 
-def notify(cfg: dict, title: str, body: str, dry_run: bool = False) -> list[str]:
+def notify(cfg: dict, title: str, body: str,
+           dry_run: bool = False) -> tuple[list[str], bool]:
+    """逐个渠道推送，返回 (每个渠道的结果, 是否存在「最终失败」的渠道)。
+
+    · 单个渠道失败会重试一次，仍失败才算失败；
+    · 没有任何渠道被启用 / dry-run 时不算失败。
+    """
     results: list[str] = []
+    had_failure = False
     for label, key, fn in PROVIDERS:
         conf = cfg["channels"].get(key, {})
         if not conf.get("enabled"):
@@ -800,6 +853,13 @@ def notify(cfg: dict, title: str, body: str, dry_run: bool = False) -> list[str]
             results.append(f"[dry-run] 跳过 {label} 推送")
             continue
         ok, msg = fn(cfg, title, body)
+        if not ok:
+            time.sleep(2)                     # 偶发失败（如 5xx）重试一次
+            ok2, msg2 = fn(cfg, title, body)
+            if not ok2:
+                had_failure = True
+                msg = msg2
+            ok = ok2
         line = f"{label}: {'成功' if ok else '失败'} {msg}"
         results.append(line)
         log(line)
@@ -807,7 +867,7 @@ def notify(cfg: dict, title: str, body: str, dry_run: bool = False) -> list[str]
     if not results:
         results.append("未启用任何推送渠道（可在 config.json 里开启 Server酱 / PushPlus）")
         log(results[-1])
-    return results
+    return results, had_failure
 
 
 def windows_toast(title: str, message: str) -> None:
@@ -866,12 +926,13 @@ def load_snapshot() -> dict:
 
 
 def write_snapshot(merged: dict, checked_at: str, missing: dict, removed_ids: list,
-                   note: str = "", runs: int = 1) -> None:
+                   note: str = "", runs: int = 1,
+                   site: str | None = None, list_url: str | None = None) -> None:
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     data = {
         "version": 4,
-        "site": SITE,
-        "list_url": LIST_URL,
+        "site": site or site_of(LIST_URL),
+        "list_url": list_url or LIST_URL,
         "checked_at": checked_at,
         "total": len(merged),
         "note": note,
@@ -884,7 +945,8 @@ def write_snapshot(merged: dict, checked_at: str, missing: dict, removed_ids: li
 
 
 def save_snapshot(old: dict, items: list[dict], diff: dict, checked_at: str,
-                  note: str = "") -> None:
+                  note: str = "", site: str | None = None,
+                  list_url: str | None = None) -> None:
     """保存快照。
 
     · items 是本轮抓到的公告；
@@ -905,11 +967,11 @@ def save_snapshot(old: dict, items: list[dict], diff: dict, checked_at: str,
             keep["first_missing_at"] = missing[aid]
         merged[aid] = keep
 
-    runs = int((old or {}).get("run_count") or 0) + 1
+    runs = _as_int((old or {}).get("run_count"), 0) + 1
     write_snapshot(
         merged, checked_at, missing,
         (diff or {}).get("removed_ids") or [],
-        note, runs,
+        note, runs, site=site, list_url=list_url,
     )
     log(f"快照已更新：{SNAPSHOT_PATH}（{len(merged)} 条"
         + (f"，其中 {len(missing)} 条待确认下架" if missing else "") + "）")
@@ -930,7 +992,7 @@ def prune_reports(keep_last: int) -> None:
         return
     files = sorted(
         (p for p in REPORT_DIR.glob("*") if p.name not in ("latest.md", "latest.html")),
-        key=lambda p: p.stat().st_mtime,
+        key=lambda p: p.name,   # 文件名即 YYYYMMDD-HHMMSS；Git 不保留 mtime，按名字排才可靠
         reverse=True,
     )
     for old in files[keep_last:]:
@@ -938,26 +1000,6 @@ def prune_reports(keep_last: int) -> None:
             old.unlink()
         except Exception:
             pass
-
-
-def _write_partial(items: list[dict], cfg: dict, dry_run: bool) -> None:
-    """把本轮抓取结果落到 state/partial.json.gz，便于调试与人工核查。
-
-    dry-run 不写文件；CI 里默认也不写（这份文件只是给人看的）。
-    """
-    if dry_run or (IS_CI and not os.environ.get("JSZG_WRITE_PARTIAL")):
-        return
-    try:
-        STATE_DIR.mkdir(parents=True, exist_ok=True)
-        _write_json_gz(
-            PARTIAL_PATH,
-            {"saved_at": now_cst().strftime("%Y-%m-%d %H:%M:%S"),
-             "total": len(items),
-             "column": cfg["watch"].get("column_name", COLUMN_NAME),
-             "items": items},
-        )
-    except Exception as exc:  # noqa: BLE001
-        log(f"警告：partial.json.gz 写入失败（{exc}）")
 
 
 # --------------------------------------------------------------------------
@@ -971,12 +1013,14 @@ def run(args) -> int:
         return 0
 
     checked_at = now_cst().strftime("%Y-%m-%d %H:%M:%S")
+    list_url = cfg["watch"].get("list_url") or LIST_URL
+    cur_site = site_of(list_url)
     log("=" * 62)
-    log(f"开始检查 {cfg['watch'].get('list_url', LIST_URL)}")
+    log(f"开始检查 {list_url}")
 
     old = load_snapshot()
     old_items = old.get("items") or {}
-    site_changed = bool(old_items) and old.get("site") != SITE
+    site_changed = bool(old_items) and old.get("site") != cur_site
     first_run = (not old_items) or site_changed
     base_date = old.get("checked_at")
 
@@ -997,8 +1041,8 @@ def run(args) -> int:
             traceback.print_exc()
         notify(
             cfg,
-            "教师资格网｜抓取失败",
-            f"抓取 {cfg['watch'].get('list_url', LIST_URL)} 失败：{exc}\n请检查网络或稍后重试。",
+            f"{MONITOR_NAME}｜抓取失败",
+            f"抓取 {list_url} 失败：{exc}\n请检查网络或稍后重试。",
             dry_run=args.dry_run,
         )
         return 2
@@ -1013,7 +1057,6 @@ def run(args) -> int:
     if not first_run and not args.baseline:
         new_ids = {it["id"] for it in items if it["id"] not in work_items}
         digest_items(items, new_ids, cfg)
-    _write_partial(items, cfg, args.dry_run)
 
     if first_run or args.baseline:
         diff = {
@@ -1024,7 +1067,8 @@ def run(args) -> int:
         log("已建立基线快照（本次不产生变更告警）")
         if not args.dry_run:
             # 用 work_old：站点更换/重建基线时不能把旧站点条目合并进来
-            save_snapshot(work_old, items, diff, checked_at, note="baseline")
+            save_snapshot(work_old, items, diff, checked_at, note="baseline",
+                          site=cur_site, list_url=list_url)
     else:
         diff = diff_snapshots(work_old, items, cfg, complete)
         for aid in diff["missing"]:
@@ -1036,13 +1080,14 @@ def run(args) -> int:
             f"下架 {len(diff['removed'])}，重新出现 {len(diff['reappeared'])}"
         )
         if not args.dry_run:
-            save_snapshot(work_old, items, diff, checked_at)
+            save_snapshot(work_old, items, diff, checked_at,
+                          site=cur_site, list_url=list_url)
 
     stamp = now_cst().strftime("%Y%m%d-%H%M%S")
     if not args.dry_run:
         path = save_reports(report, stamp)
         log(f"报告已保存：{path}")
-        prune_reports(int(cfg["report"].get("keep_last") or 0))
+        prune_reports(_as_int(cfg["report"].get("keep_last"), 0))
 
     print("-" * 62)
     print(report["markdown"])
@@ -1058,15 +1103,22 @@ def run(args) -> int:
         log("首次运行只建立基线，不推送；如需测试推送请加 --force")
         should_push = False
 
+    rc = 0
     if should_push:
-        notify(cfg, f"教师资格网｜{report['headline']}", report["summary"], dry_run=args.dry_run)
+        _, failed = notify(
+            cfg, f"{MONITOR_NAME}｜{report['headline']}", report["summary"],
+            dry_run=args.dry_run,
+        )
+        if failed:
+            log("警告：推送渠道重试后仍失败，请检查配置或网络")
+            rc = 4          # 让 Actions 变红，避免「提醒静默丢失」
         if focus_hit and not args.dry_run:
             windows_toast("教师资格认定公告有更新", "发现重点公告变更，请查看微信推送")
     else:
         log("无变化或未命中推送条件，不发送通知")
 
     log("检查完成")
-    return 0
+    return rc
 
 
 def self_test() -> int:
@@ -1091,8 +1143,9 @@ def self_test() -> int:
         print("没有解析到任何公告，页面结构可能已变化")
         return 1
 
-    focus = [i for i in items if matches_keywords(i["title"], cfg["watch"].get("focus_keywords") or [])]
-    print(f"  共 {len(items)} 条，其中重点（{'/'.join(cfg['watch'].get('focus_keywords') or [])}）{len(focus)} 条")
+    focus_kws = _as_list(cfg["watch"].get("focus_keywords"))
+    focus = [i for i in items if matches_keywords(i["title"], focus_kws)]
+    print(f"  共 {len(items)} 条，其中重点（{'/'.join(focus_kws)}）{len(focus)} 条")
     for i in items[:12]:
         print(f"      · {i['date']}  {i['title']}")
 
@@ -1101,12 +1154,31 @@ def self_test() -> int:
         page_html = http_get(items[0]["detail_url"], cfg)
         info = parse_article(page_html)
         print(f"  最新一条：{items[0]['title']}")
-        print(f"  正文长度：{info['chars']} 字，指纹：{info['hash'][:16]}…")
+        print(f"  正文长度：{info['chars']} 字")
         if not info["chars"]:
             print("  警告：正文为空，正文容器可能已变化")
             return 1
     except Exception as exc:  # noqa: BLE001
         print(f"  正文抓取失败：{exc}")
+        return 1
+
+    print("\n-- 快照与报告（离线） --")
+    snap = load_snapshot()
+    if snap.get("items"):
+        print(f"  快照可读：{len(snap['items'])} 条"
+              f"（基线时间 {snap.get('checked_at')}，站点 {snap.get('site')}）")
+    else:
+        print("  提示：尚无快照，首次运行会建立基线")
+    try:
+        demo = build_report(
+            now_cst().strftime("%Y-%m-%d %H:%M:%S"), len(items),
+            {"added": [], "changed": [], "removed": [], "reappeared": [],
+             "missing": {}, "removed_ids": [], "confirmed_removed": set()},
+            cfg, snap.get("checked_at"), first_run=False,
+        )
+        print(f"  报告生成正常（Markdown {len(demo['markdown'])} 字符）")
+    except Exception as exc:  # noqa: BLE001
+        print(f"  报告生成失败：{exc}")
         return 1
 
     print("\n自检通过。" if complete else "\n自检完成，但列表抓取不完整，请检查网络。")

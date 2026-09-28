@@ -1,16 +1,18 @@
-﻿# 教师资格网通知公告监控（浙江省教师资格认定）
+# 浙江省教师资格认定公告监控（浙江省教育考试院）
 
-每天自动检查 [中国教师资格网 · 资格资讯 > 通知公告](https://www.jszg.edu.cn/news.html)，
-发现**新增 / 更新 / 下架**就推到微信，并单独高亮**浙江省**的教师资格认定公告。
-最初是给 Windows 本机写的，同一份脚本既能本机跑，也能放到 GitHub 上由
-GitHub Actions 每天定时跑（推荐后者：不用开着电脑）。
+每天自动检查 [浙江省教育考试院 · 中小学教师资格认定及定期注册](https://www.zjzs.net/col/col62/index.html)，
+发现**新增 / 标题变化 / 下架**就推到微信，并重点高亮**教师资格认定**公告，
+用来第一时间发现「浙江省2026年下半年中小学教师资格认定公告」这类新公告。
+同一份脚本既能本机跑，也能放到 GitHub 上由 GitHub Actions 每天定时跑（推荐后者：不用开着电脑）。
 
-监控两个栏目：
+监控栏目（单个）：
 
 | 栏目 | 说明 |
 | --- | --- |
-| 教师资格认定（id=107） | 750+ 条，各省认定公告都在这里 |
-| 教师资格定期注册（id=181） | 100+ 条，含浙江省定期注册公告 |
+| 中小学教师资格认定及定期注册（col62） | 认定 + 定期注册合并为一个列表，当前约 8 条（会随站点更新变化） |
+
+> 说明：本栏目公告数据内嵌在列表页的 `<record><![CDATA[...]]>` 中，一次请求即可拿全，
+> 不需要翻页（`totalRecord=8`、`perPage=12`）。
 
 ---
 
@@ -46,17 +48,11 @@ GitHub 没有「定时器」这种按钮，定时这件事本身必须由一个�
 └─ README.md                      ← 说明书（建议）
 ```
 
-**不需要上传的**：`config.json`（含你的密钥）、`run_now.bat`、`install_task.ps1`
-（这两个是 Windows 本机用的）、`logs/`、`__pycache__/`、以及原来 PC 上的报告文件。
+**不需要上传的**：`config.json`（含你的密钥）、`logs/`、`__pycache__/`、
+以及本机跑出来的报告文件。
 
-我已经把这份「只含必要文件」的干净目录放在：
-
-```
-C:\Users\Admin\Desktop\test\jszg-watch-github\
-```
-
-里面已经带好了当前基线快照，传上去就是「已知 858 条公告」的状态，
-不会把历史公告当成新增。
+本仓库已经带好了当前基线快照（`state/snapshot.json.gz`），传上去就是
+「已知 8 条左右公告」的状态，不会把历史公告当成新增。
 
 ### 2. 第 0 步：拿微信推送的 key（先做，之后直接填网页表单）
 
@@ -73,7 +69,7 @@ C:\Users\Admin\Desktop\test\jszg-watch-github\
    选 **Private**（推荐，只有你自己看得到；选 Public 也可以，因为仓库里没有密钥）→
    **Create repository**。
 2. 在新仓库页面点 **uploading an existing file**（或 `Add file → Upload files`）。
-3. 打开 `C:\Users\Admin\Desktop\test\jszg-watch-github\`，**全选里面的内容**拖进网页。
+3. 打开本项目所在目录，**全选里面的内容**拖进网页。
    > ⚠️ 注意两点：
    > - 拖**文件夹里的内容**，不要拖外面那层文件夹本身；
    > - `.github`、`.gitignore` 是隐藏项。Windows 资源管理器里先
@@ -102,7 +98,7 @@ C:\Users\Admin\Desktop\test\jszg-watch-github\
 ### 5. 在网页上打开并手动跑一次
 
 1. 点仓库顶部 **Actions** 标签。
-2. 左侧选 **教师资格网通知公告监控**。
+2. 左侧选 **浙江教师资格认定公告监控**。
 3. 右侧 **Run workflow** 按钮 → 下拉里勾选：
    - **force** = true → 无论有没有变化都推一条，用来验证微信通道是否配好；
    - 第一次建库时不要勾 **baseline**（仓库里已经带了快照，勾了反而会重建）。
@@ -115,7 +111,7 @@ C:\Users\Admin\Desktop\test\jszg-watch-github\
 
 | 想做什么 | 在哪里点 |
 | --- | --- |
-| 立即跑一次 | `Actions → 教师资格网通知公告监控 → Run workflow` |
+| 立即跑一次 | `Actions → 浙江教师资格认定公告监控 → Run workflow` |
 | 测试微信通道 | 同上，勾选 **force** |
 | 重建基线 | 同上，勾选 **baseline** |
 | 改运行时间 | 打开 `.github/workflows/watch.yml` → 右上角铅笔图标 → 改 `cron` → Commit |
@@ -149,7 +145,7 @@ C:\Users\Admin\Desktop\test\jszg-watch-github\
 
 ## 二、在本机 Windows 上跑
 
-不想用 GitHub 也可以纯本机跑。
+不想用 GitHub 也可以纯本机跑（本机需已装 Python 3.8+；脚本只用标准库，不需要 pip 安装）。
 
 ### 1. 配置 `config.json`
 
@@ -167,25 +163,34 @@ C:\Users\Admin\Desktop\test\jszg-watch-github\
 
 ### 2. 跑起来
 
+在项目目录里执行：
+
 ```bat
-run_now.bat                 :: 立即检查一次（没变化不推送）
-run_now.bat --force         :: 强制推一条，测推送通道
-run_now.bat --dry-run       :: 只抓取对比并打印，不推送、不写文件
-run_now.bat --self-test     :: 自检：配置、网络、两个栏目是否抓得到
-run_now.bat --baseline      :: 重建基线
+python jszg_watch.py                 :: 立即检查一次（没变化不推送）
+python jszg_watch.py --force         :: 强制推一条，测推送通道
+python jszg_watch.py --dry-run       :: 只抓取对比并打印，不推送、不写文件
+python jszg_watch.py --self-test     :: 自检：配置、网络、列表与正文是否抓得到
+python jszg_watch.py --baseline      :: 重建基线
 ```
 
-### 3. 装成每天 09:00 的计划任务
+### 3. 设成每天 09:00 自动跑（可选）
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\install_task.ps1              # 默认 09:00
-powershell -ExecutionPolicy Bypass -File .\install_task.ps1 -Time 08:30  # 改时间
-powershell -ExecutionPolicy Bypass -File .\install_task.ps1 -RunNow      # 立即跑一次
-powershell -ExecutionPolicy Bypass -File .\install_task.ps1 -Remove      # 删除任务
-```
+用 Windows 自带的「任务计划程序」即可，不需要额外脚本：
 
-> `install_task.ps1` 存的是 **UTF-8 with BOM**。Windows PowerShell 5.1 读取无 BOM
-> 的 UTF-8 脚本会按 GBK 解码，中文乱码并报语法错误，改这个文件时请保持 BOM。
+1. `Win + R` → 输入 `taskschd.msc` → 回车；
+2. 右侧「创建基本任务」→ 名称随便填（如「教师资格认定公告监控」）→
+   触发器选「每天」、时间填 `09:00`；
+3. 操作选「启动程序」：
+   - **程序或脚本**：`python`
+   - **添加参数**：`jszg_watch.py`
+   - **起始于**：本项目所在目录（例如 `C:\path\to\jszg-watch-github`）
+4. 完成后确定即可。
+
+> 等价的一条命令（管理员 CMD 执行一次，注意把路径换成你自己的）：
+> ```bat
+> schtasks /Create /TN "jszg-watch" /SC DAILY /ST 09:00 /TR "cmd /c cd /d C:\path\to\jszg-watch-github && python jszg_watch.py"
+> ```
+> 删除任务：`schtasks /Delete /TN "jszg-watch" /F`
 
 ---
 
@@ -202,23 +207,31 @@ powershell -ExecutionPolicy Bypass -File .\install_task.ps1 -Remove      # 删�
 
   "notify": {
     "always_notify": false,           // true = 每天不管有没有变化都推一条
-    "notify_non_zhejiang": true       // false = 只在浙江有变动时才打扰你
+    "notify_non_focus": true          // false = 只在重点公告（教师资格认定）有变动时才打扰你
   },
 
   "watch": {
-    "province_keywords": ["浙江"],    // 标题含这些词就算「本省相关」
+    "list_url": "https://www.zjzs.net/col/col62/index.html", // 换栏目/换站只改这里
+    "column_name": "中小学教师资格认定及定期注册",
+    "focus_keywords": ["教师资格认定"], // 标题命中即「重点」：高亮 + 优先推送
     "extra_keywords": [],             // 额外关注词，命中会在报告里单列
-    "max_pages": 80,                  // 每个栏目最多翻多少页（1 页 10 条）
-    "list_passes": 2,                 // 列表抓几遍再按 ID 合并（对抗缓存抖动）
-    "digest_pages": 2,                // 对每个栏目最近 N 页抓正文指纹
+    "digest_new": true,               // 只对新增公告抓正文（正文监控）
+    "digest_max": 10,                 // 单轮最多为多少条新增公告抓正文
     "removal_confirm_days": 7,        // 连续多少天抓不到才确认「下架」
-    "page_delay": 0.3,                // 请求间隔秒数
-    "timeout": 30, "retries": 3, "retry_delay": 3
+    "page_delay": 0.5,                // 请求间隔秒数
+    "timeout": 30, "retries": 3, "retry_delay": 3,
+    "allow_insecure_ssl": true        // 该站点证书链异常，需降级校验（见下）
   },
 
   "report": { "keep_last": 120 }      // reports/ 保留最近多少份
 }
 ```
+
+> **关于 `allow_insecure_ssl`**：`www.zjzs.net` 的 TLS 证书链不完整（链中出现自签名证书），
+> Python 默认校验会直接失败（浏览器能容错，所以你在浏览器里打不开异常）。
+> 为 `true` 时脚本会先按正常校验请求，失败后自动降级为「不校验证书」再重试一次——
+> 站点哪天修好证书，就会自动恢复正常校验。若你更看重安全性，可设为 `false`，
+> 但那样该站点很可能一直抓不到。
 
 ### 微信推送怎么开通
 
@@ -237,33 +250,31 @@ CI 里为了避免把密钥写进文件，优先用环境变量；本机也能�
 | `JSZG_PUSHPLUS_TOKEN` | 设置后自动启用 PushPlus |
 | `JSZG_DATA_DIR` | 数据目录（快照 / 报告 / 日志放哪） |
 | `JSZG_CONFIG` | 指定配置文件路径 |
-| `JSZG_WRITE_PARTIAL` | CI 里也写 `state/partial.json.gz`（默认不写） |
 
 ---
 
 ## 四、判断逻辑与误报控制（重要）
 
-这个网站的列表页和详情页前面有一层**多版本缓存**：连续请求同一页，可能分别命中
-「今天 / 3 天前 / 5 天前」等不同旧版本。实测 8 轮抓取里，某个公告只出现了 2 次；
-发布日期、正文内容、甚至某条公告在不在列表里都会来回抖。所以脚本做了这些防护：
-
 | 风险 | 处理方式 |
 | --- | --- |
-| 公告顺序 / 日期抖动 | 以**文章 ID**（`a1234...`）为唯一键判定新增，日期只作展示 |
-| 整条公告偶尔抓不到 | 每个栏目列表**抓 2 遍**按 ID 合并（`watch.list_passes`） |
-| 正文被抓到旧版本 | 连续两次取样都偏离历史版本才算「疑似改动」，且要**下一次运行仍一致**才确认 |
-| 老公告被误判成新增 | 快照**只增不减**：曾经见过的 ID 永远不会被当成新增；某轮暂时缺失的公告恢复后归入报告的「暂时查不到 · 现已恢复」 |
+| 公告顺序 / 日期抖动 | 以**文章 ID**（`art_62_12627`）为唯一键判定新增，日期只作展示 |
+| 老公告被误判成新增 | 快照**只增不减**：曾经见过的 ID 永远不会被当成新增 |
 | 漏抓导致误判下架 | 只有**连续 7 天**都抓不到才确认下架（`removal_confirm_days`），中途又抓到就清零 |
-| 网络中断 | 抓取不完整时快照按合并方式保存，不会把没抓到的当新增 / 下架；彻底失败会推一条「抓取失败」 |
+| 下架后重复告警 | 确认下架的公告会**从快照中移除**，不会之后每天都报一次 |
+| 抓取不完整 | 该轮**不做任何下架判定**，快照按合并方式保存，不会把没抓到的当新增 / 下架 |
+| 换了站点/栏目 | 快照里记录了 `site`，一旦监控目标变化会自动**重建基线**，旧站点数据既不报新增也不报下架 |
+| 网络中断 | 彻底失败会推一条「抓取失败」 |
 
-代价是：**正文改动和下架的告警会延迟**（分别需要两次运行 / 连续 7 天确认）。
-对「每天看一眼有没有浙江新公告」这个需求，换来的几乎为零的误报是划算的。
-想更灵敏就调小 `removal_confirm_days`、调大 `list_passes`。
+**正文监控的口径**：只对**本次新增**的公告抓取正文（`watch.digest_new`），
+正文摘要写进 Markdown / HTML 报告（**微信推送里只有标题 + 日期**）；历史公告不再重复抓取，
+**也不检测历史公告的正文改动**，**不检测附件变化**。
+因此每轮请求数很少（正常 1 次列表 + 新增条数这么多次正文）。
 
-顺带说明：这个网站「教师资格认定」栏目的公告标题里省份一定写全（如
-「浙江省2026年下半年中小学教师资格认定公告」），按标题里的「浙江」匹配很可靠。
-当前基线里与浙江相关的公告共 **24 条**：认定栏目 20 条，定期注册栏目 4 条；
-最近一条浙江认定公告是 `2026-03-16`，最近一条浙江定期注册公告是 `2026-09-17`。
+代价是：**下架的告警会延迟**（需要连续 7 天确认）。对「每天看一眼有没有新公告」这个需求，
+换来的几乎为零的误报是划算的；想更灵敏就把 `removal_confirm_days` 调小。
+
+**重点公告**：标题命中 `watch.focus_keywords`（默认 `["教师资格认定"]`）的新增/变化公告
+会高亮为「重点关注」并优先推送——等 2026 年下半年认定公告时就会第一时间提醒你。
 
 ---
 
@@ -274,23 +285,47 @@ A：说明 `state/snapshot.json.gz` 没被提交回仓库。检查工作流的�
 步骤有没有报错（常见原因是仓库 Settings → Actions → Workflow permissions 里
 把写权限关掉了，或仓库开了分支保护）。
 
+**Q：Actions 报错 `EnvironmentFileNotFound: '.../environment.yml' file not found`，
+还打印一堆 ANACONDA TERMS OF SERVICE？**
+A：**这不是本项目的报错**，是 GitHub 自带的 Anaconda 入门模板（`python-package-conda.yml`）
+在跑。去 `Actions` 左侧栏看失败的那次运行叫什么名字——如果叫
+「Python Package using Conda」，就把它删掉：
+
+`Settings` 左边的 `Code` → 进 `.github/workflows/` 目录 → 打开
+`python-package-conda.yml` → 右上角 `...` → **Delete file** → Commit。
+
+删掉后只留下 `watch.yml` 和 `smoke.yml` 两个就没问题了。
+判断依据：本项目的工作流把代码检出到 `workspace/` 子目录，日志里的路径会带
+`/workspace/`；而那个报错路径是 `/home/runner/work/jszg-watch/jszg-watch/environment.yml`，
+正好是「没有子目录」的检出方式，说明它来自别的文件。本项目不用 conda、也不用 pip。
+
+**Q：只想要定时任务，不想要「每次提交都跑测试」。**
+A：删掉 `.github/workflows/smoke.yml` 即可，`watch.yml` 不依赖它
+（`tools/ci_smoke_test.py` 可以留着，也可以一起删）。
+
 **Q：每天都推一条「无变化」？**
 A：`notify.always_notify` 被改成了 `true`，改回 `false` 即可。
 
-**Q：只想收浙江的，别的省别烦我。**
-A：`notify.notify_non_zhejiang` 改成 `false`。
+**Q：只想收重点公告（教师资格认定）的提醒。**
+A：`notify.notify_non_focus` 改成 `false`；想改「什么算重点」就调 `watch.focus_keywords`。
 
 **Q：微信一直收不到。**
 A：先在 Actions 里用 `force` 手动跑一次看日志。`Server酱: 成功` 表示推送接口
 收下了；收不到多半是没关注对应公众号 / token 复制错了。
 
 **Q：网站改版抓不到了。**
-A：先跑 `--self-test` 看两个栏目各能抓到多少条。若明显变少，多半是列表页结构
-变了，改 `jszg_watch.py` 里的 `ITEM_RE` 正则即可。
+A：先跑 `--self-test` 看能抓到多少条（正常应为 8 条左右）。若为 0 或明显偏少，
+多半是列表页 `<record><![CDATA[...]]>` 的结构变了，改 `jszg_watch.py` 里的
+`RECORD_RE` 等相关正则即可。
 
 **Q：快照会越来越大吗？**
-A：不会。每条公告只存 `hashes`（最多 8 个历史正文指纹）等少量字段，gzip 后
-约 40 KB，一年 365 次提交约 15 MB。`reports/` 默认只留最近 120 份。
+A：不会。栏目只有 8 条公告，每条只存标题 / 日期 / 链接等少量字段，gzip 后仅几 KB。
+`reports/` 默认只留最近 120 份。
+
+**Q：想换成别的栏目 / 别的站点？**
+A：改配置里的 `watch.list_url` 和 `watch.column_name` 即可，不用动代码。换站后脚本会
+自动识别 `site` 变化并重建基线，不会把新站点的历史公告当成新增，也不会把旧站点数据
+误判成下架。
 
 **Q：我能把快照 / 报告换成别的存储吗（比如 Gist、S3）？**
 A：可以。`load_snapshot()` / `write_snapshot()` 是唯一的读写入口，改成调用 API

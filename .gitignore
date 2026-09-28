@@ -4,10 +4,7 @@ config.json
 
 # ---- 运行产物 ----
 logs/
-state/partial.json.gz
-state/partial.json
 state/*.tmp
-state/*.bak
 
 # ---- Python ----
 __pycache__/
