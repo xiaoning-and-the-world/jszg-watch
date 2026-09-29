@@ -99,6 +99,10 @@ GitHub 没有「定时器」这种按钮，定时这件事本身必须由一个�
 只用其中一个也行，另一个留着空不建即可。密钥只存在 GitHub 的加密存储里，
 工作流运行时才注入，**不会**出现在仓库文件或日志里。
 
+> **想推给多个账号**：在**同一个 Secret** 里把多个 key 用**逗号 / 分号 / 换行**隔开即可。
+> 例如 `SERVERCHAN_SENDKEY = SCT账号A,SCT账号B`，工作流会自动拆成数组逐个推送；
+> 只写一个 key 也完全不受影响。
+
 > 顺便检查一下写权限：`Settings → Actions → General → Workflow permissions`
 > 选 **Read and write permissions**。工作流每天要把新的快照提交回仓库，
 > 没有这个权限就会报 `403`。
@@ -332,8 +336,13 @@ A：按下面顺序查（从最常见到最少见）：
 **Q：想让两个微信号都收到推送？**
 A：两种方式：
 - **不同渠道各一个**：Server酱 和 PushPlus 都设 `enabled: true`、各填一个 key，会各推一条；
-- **同一渠道多个账号**：把 `sendkey` / `token` 写成**数组**，例如
-  `"serverchan": { "enabled": true, "sendkey": ["SCT账号A", "SCT账号B"] }`，脚本会逐个推送。
+- **同一渠道多个账号**：
+  - **本机跑** → 把 `config.json` 里的 `sendkey` / `token` 写成**数组**，例如
+    `"serverchan": { "enabled": true, "sendkey": ["SCT账号A", "SCT账号B"] }`；
+  - **GitHub Actions** → 在**同一个 Secret** 里用逗号 / 分号 / 换行分隔，例如
+    `SERVERCHAN_SENDKEY = SCT账号A,SCT账号B`（工作流会自动拆成数组）。
+
+  脚本会逐个推送；**只有失败的账号会重试**，成功的账号不会收到重复消息。
   只要其中某一个账号重试后仍失败，任务退出码会变成 4（Actions 显示红叉），
   方便你发现「只发出去一半」。
 
