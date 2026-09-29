@@ -5,7 +5,7 @@ on:
     # cron 用的是 UTC。01:17 UTC = 北京时间 09:17（中国全年不实行夏令时）。
     # 刻意避开整点：GitHub 官方说明整点是负载最高的时候，定时任务可能被延迟、
     # 甚至被丢弃（"some queued jobs may be dropped"），所以用非整点分钟更稳。
-    - cron: "17 1 * * *"
+    - cron: "17 12 * * *"
   workflow_dispatch:
     inputs:
       force:
