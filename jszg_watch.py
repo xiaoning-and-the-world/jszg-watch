@@ -802,31 +802,64 @@ def inline_md(text: str) -> str:
 # 微信推送
 # --------------------------------------------------------------------------
 
+def _push_once(url: str, data: dict, is_ok) -> tuple[bool, str]:
+    """POST 一次并按 is_ok 判断是否成功；失败自动重试一次（避免偶发 5xx 丢提醒）。"""
+    last = ""
+    for attempt in (1, 2):
+        try:
+            txt = http_post(url, data)
+            if is_ok(txt):
+                return True, txt
+            last = txt
+        except Exception as exc:  # noqa: BLE001
+            last = f"异常：{exc}"
+        if attempt == 1:
+            time.sleep(2)
+    return False, last
+
+
+def _push_multi(values, send_one, field: str) -> tuple[bool, str]:
+    """对一组账号逐个推送，返回 (是否全部成功, 说明文字)。
+
+    values 支持「单个字符串」或「字符串数组」——想推多个账号就写成数组：
+        "sendkey": ["SCT账号A", "SCT账号B"]
+    """
+    accounts = _as_list(values)
+    if not accounts:
+        return False, f"未配置 {field}"
+    ok_count = 0
+    detail: list[str] = []
+    for idx, value in enumerate(accounts, 1):
+        ok, txt = send_one(value)
+        ok_count += 1 if ok else 0
+        if len(accounts) == 1:  # 单账号：保持原来的简洁输出
+            return ok, (txt[:300] if ok else f"推送失败：{txt[:200]}")
+        detail.append(f"#{idx}{'成功' if ok else '失败'}")
+        if not ok:
+            detail[-1] += f"({txt[:80].strip()})"
+    return ok_count == len(accounts), f"{ok_count}/{len(accounts)} 成功｜{' '.join(detail)}"
+
+
 def push_serverchan(cfg: dict, title: str, body: str) -> tuple[bool, str]:
-    key = (cfg["channels"]["serverchan"].get("sendkey") or "").strip()
-    if not key:
-        return False, "未配置 sendkey"
-    host = "https://sc.ftqq.com" if key.upper().startswith("SCU") else "https://sctapi.ftqq.com"
-    try:
-        txt = http_post(f"{host}/{key}.send", {"title": title, "desp": body})
-        flat = txt.replace(" ", "")
-        return ('"code":0' in flat or '"errno":0' in flat), txt[:300]
-    except Exception as exc:  # noqa: BLE001
-        return False, f"Server酱推送异常：{exc}"
+    def send_one(key: str):
+        host = "https://sc.ftqq.com" if key.upper().startswith("SCU") else "https://sctapi.ftqq.com"
+        return _push_once(
+            f"{host}/{key}.send", {"title": title, "desp": body},
+            lambda t: '"code":0' in t.replace(" ", "") or '"errno":0' in t.replace(" ", ""),
+        )
+
+    return _push_multi(cfg["channels"]["serverchan"].get("sendkey"), send_one, "sendkey")
 
 
 def push_pushplus(cfg: dict, title: str, body: str) -> tuple[bool, str]:
-    token = (cfg["channels"]["pushplus"].get("token") or "").strip()
-    if not token:
-        return False, "未配置 token"
-    try:
-        txt = http_post(
+    def send_one(token: str):
+        return _push_once(
             "https://www.pushplus.plus/send",
             {"token": token, "title": title, "content": body, "template": "markdown"},
+            lambda t: '"code":200' in t.replace(" ", ""),
         )
-        return ('"code":200' in txt.replace(" ", "")), txt[:300]
-    except Exception as exc:  # noqa: BLE001
-        return False, f"PushPlus 推送异常：{exc}"
+
+    return _push_multi(cfg["channels"]["pushplus"].get("token"), send_one, "token")
 
 
 # 渠道注册表：新增渠道只需在这里加一行
@@ -840,7 +873,8 @@ def notify(cfg: dict, title: str, body: str,
            dry_run: bool = False) -> tuple[list[str], bool]:
     """逐个渠道推送，返回 (每个渠道的结果, 是否存在「最终失败」的渠道)。
 
-    · 单个渠道失败会重试一次，仍失败才算失败；
+    · 每个账号失败已在 _push_once 内部重试过一次；
+    · 同渠道配了多个账号时，只要有一个账号最终失败就算失败；
     · 没有任何渠道被启用 / dry-run 时不算失败。
     """
     results: list[str] = []
@@ -854,12 +888,7 @@ def notify(cfg: dict, title: str, body: str,
             continue
         ok, msg = fn(cfg, title, body)
         if not ok:
-            time.sleep(2)                     # 偶发失败（如 5xx）重试一次
-            ok2, msg2 = fn(cfg, title, body)
-            if not ok2:
-                had_failure = True
-                msg = msg2
-            ok = ok2
+            had_failure = True
         line = f"{label}: {'成功' if ok else '失败'} {msg}"
         results.append(line)
         log(line)
