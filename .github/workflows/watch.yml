@@ -5,7 +5,7 @@ on:
     # cron 用的是 UTC。01:17 UTC = 北京时间 09:17（中国全年不实行夏令时）。
     # 刻意避开整点：GitHub 官方说明整点是负载最高的时候，定时任务可能被延迟、
     # 甚至被丢弃（"some queued jobs may be dropped"），所以用非整点分钟更稳。
-    - cron: "26 12 * * *"
+    - cron: "17 1 * * *"
   workflow_dispatch:
     inputs:
       force:
@@ -56,22 +56,23 @@ jobs:
           python - <<'PY'
           import json, os, pathlib
 
+          def split_keys(raw):
+              # 一个 Secret 里可以放多个 key：用逗号 / 分号 / 换行分隔都会自动拆成数组
+              text = (raw or "").replace("\r", "\n").replace(";", ",").replace("\n", ",")
+              return [p.strip() for p in text.split(",") if p.strip()]
+
           cfg = json.loads(pathlib.Path("config.example.json").read_text(encoding="utf-8"))
           cfg.pop("_说明", None)
 
-          sc = (os.environ.get("SERVERCHAN_SENDKEY") or "").strip()
-          pp = (os.environ.get("PUSHPLUS_TOKEN") or "").strip()
-          cfg["channels"]["serverchan"] = (
-              {"enabled": True, "sendkey": sc} if sc else {"enabled": False, "sendkey": ""}
-          )
-          cfg["channels"]["pushplus"] = (
-              {"enabled": True, "token": pp} if pp else {"enabled": False, "token": ""}
-          )
+          sc = split_keys(os.environ.get("SERVERCHAN_SENDKEY"))
+          pp = split_keys(os.environ.get("PUSHPLUS_TOKEN"))
+          cfg["channels"]["serverchan"] = {"enabled": bool(sc), "sendkey": sc}
+          cfg["channels"]["pushplus"] = {"enabled": bool(pp), "token": pp}
 
           pathlib.Path("config.json").write_text(
               json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8"
           )
-          print("已生成 config.json：serverchan=%s, pushplus=%s" % (bool(sc), bool(pp)))
+          print("已生成 config.json：serverchan=%d 个账号, pushplus=%d 个账号" % (len(sc), len(pp)))
           PY
 
       - name: 自检（配置 / 网络 / 栏目）
