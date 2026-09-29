@@ -728,23 +728,23 @@ def build_report(checked_at: str, total: int, diff: dict, cfg: dict,
     L.append("---")
     L.append(f"<sub>由 jszg_watch.py 自动生成 · 数据来源 [浙江省教育考试院]({cfg['watch'].get('list_url', LIST_URL)})</sub>")
 
-    # 微信推送摘要（纯文本）
-    S = [headline, f"检查时间：{checked_at}"]
-    if focus_added:
-        S += ["", "【重点·新增】"] + [f"· {i['title']}（{i['date']}）" for i in focus_added[:6]]
-    if focus_changed:
-        S += ["", "【重点·更新】"] + [f"· {i['title']}" for i in focus_changed[:6]]
-    if other_added:
-        S += ["", f"【其他新增 {len(other_added)} 条】"] + [f"· {i['title']}" for i in other_added[:6]]
-    if other_changed:
-        S += ["", f"【其他变化 {len(other_changed)} 条】"] + [f"· {i['title']}" for i in other_changed[:6]]
-    if removed:
-        S += ["", f"【下架 {len(removed)} 条】"] + [f"· {i['title']}" for i in removed[:6]]
-    if reappeared:
-        S += ["", f"【下架后重新出现 {len(reappeared)} 条】"] + [f"· {i['title']}" for i in reappeared[:6]]
-    if recent:
-        S += ["", f"【最近公告 {len(recent)} 条】"]
-        S += [f"· {i.get('date', '')} {i['title']}" for i in recent]
+    # 微信推送内容：按 Markdown 组织（Server酱 的 desp、PushPlus 的 template=markdown
+    # 都是 Markdown 渲染）。要点：① 区块前后留空行；② 列表项用 "- "。
+    # 否则 Markdown 会把**单个换行折叠成空格**，整条消息挤成"一片"。
+    S = [f"**{headline}**", "", f"检查时间：{checked_at}"]
+
+    def block(title: str, lines: list[str]) -> None:
+        if lines:
+            S.extend(["", f"**{title}**", "- " + "\n- ".join(lines)])
+
+    block("⭐ 重点·新增", [f"{i['title']}（{i['date']}）" for i in focus_added[:6]])
+    block("⭐ 重点·更新", [i["title"] for i in focus_changed[:6]])
+    block(f"其他新增 {len(other_added)} 条", [i["title"] for i in other_added[:6]])
+    block(f"其他变化 {len(other_changed)} 条", [i["title"] for i in other_changed[:6]])
+    block(f"下架 {len(removed)} 条", [i["title"] for i in removed[:6]])
+    block(f"下架后重新出现 {len(reappeared)} 条", [i["title"] for i in reappeared[:6]])
+    block(f"最近公告 {len(recent)} 条", [f"{i.get('date', '')} {i['title']}" for i in recent])
+
     if first_run:
         S += ["", "本次为首次运行，已建立基线，明日起开始对比。"]
     elif not has_change:
