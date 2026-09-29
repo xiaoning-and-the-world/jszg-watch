@@ -126,15 +126,21 @@ GitHub 没有「定时器」这种按钮，定时这件事本身必须由一个�
 
 | 想在北京时间 | 填 cron |
 | --- | --- |
-| 每天 09:00 | `0 1 * * *`（当前默认） |
+| 每天 09:17 | `17 1 * * *`（当前默认，刻意避开整点） |
 | 每天 08:30 | `30 0 * * *` |
 | 每天 12:00 | `0 4 * * *` |
 | 每天 09:00 和 21:00 | `0 1,13 * * *` |
 
+> **别用整点分钟（`0`）**：GitHub 官方说明整点是负载最高的时候，定时任务可能被延迟，
+> 甚至被直接丢弃（"some queued jobs may be dropped"，也就是当天不跑了）。
+> 用 `17 1 * * *` 这种非整点更容易准点执行。
+
 ### 7. 三个必须知道的 GitHub 行为
 
-1. **定时会延迟**：高峰期可能晚几分钟到几十分钟，偶尔更久。这是平台调度，
-   不是脚本问题。对「每天看一眼公告」够用；要精确到分钟就得自建服务器或云函数。
+1. **定时会延迟、甚至被丢弃**：高峰期可能晚几分钟到几十分钟；GitHub 官方还说明
+   整点是负载高峰，队列里的定时任务**可能被直接丢弃**（当天就不跑了）。
+   所以本项目默认用非整点 `17 1 * * *`，别改成 `0 1 * * *` 这类整点。
+   这是平台调度，不是脚本问题；要精确到分钟就得自建服务器或云函数。
 2. **仓库连续 60 天没有任何活动，schedule 会被自动停用**，并给你发邮件提醒。
    本工作流每天都会 `git commit` 一次快照，所以只要它正常跑着就不会被停；
    万一停了，去 Actions 页面点 **Enable workflow** 即可。
@@ -201,8 +207,9 @@ python jszg_watch.py --baseline      :: 重建基线
   "enabled": true,                    // false = 整体停用（CI 里仍然会跑，只是不推送）
 
   "channels": {
+    // 单账号写字符串；同一渠道要推多个账号就写成数组，会逐个推送
     "serverchan": { "enabled": true, "sendkey": "SCT..." },
-    "pushplus":   { "enabled": false, "token": "" }
+    "pushplus":   { "enabled": false, "token": ["token账号A", "token账号B"] }
   },
 
   "notify": {
@@ -284,6 +291,32 @@ CI 里为了避免把密钥写进文件，优先用环境变量；本机也能�
 A：说明 `state/snapshot.json.gz` 没被提交回仓库。检查工作流的「写回快照与报告」
 步骤有没有报错（常见原因是仓库 Settings → Actions → Workflow permissions 里
 把写权限关掉了，或仓库开了分支保护）。
+
+**Q：到了时间 Actions 却没有自动运行？**
+A：按下面顺序查（从最常见到最少见）：
+
+1. **先看有没有 `schedule` 触发的记录**：`Actions` → 左侧选中该工作流，列表的 `Event` 列会写
+   `schedule` 还是 `workflow_dispatch`。
+   - 有 `schedule` 记录但失败 → 点进去看哪一步挂了，多半是「写回快照与报告」的 `git push`
+     （写权限没开）。
+   - **完全没有 `schedule` 记录 → 是调度层面的问题**，继续往下查。
+2. **工作流是否被停用**：左侧选中后，右侧若出现 `Enable workflow` 就点它。
+   仓库「连续 60 天没有任何活动」时 GitHub 会自动停用定时（本工作流每天提交快照，正常不会被停）。
+3. **工作流文件必须在默认分支上**：`schedule` 只在默认分支（一般是 `main`）生效。
+   如果 `.github/workflows/watch.yml` 传到了别的分支，定时不会触发。
+4. **Actions 是否可用 / 额度是否用完**：`Settings → Actions → General` 确认允许 Actions；
+   私有仓库每月免费分钟数用完后 Actions 会停止运行（`Settings → Billing` 可查）。
+5. **是不是被整点拥堵吞掉了**：本工作流默认已改成非整点 `17 1 * * *`（北京时间 09:17）。
+6. **用一次手动 `Run workflow` 交叉验证**：手动能跑通 → 脚本和权限都没问题，纯粹是调度，
+   等下一次即可。
+
+**Q：想让两个微信号都收到推送？**
+A：两种方式：
+- **不同渠道各一个**：Server酱 和 PushPlus 都设 `enabled: true`、各填一个 key，会各推一条；
+- **同一渠道多个账号**：把 `sendkey` / `token` 写成**数组**，例如
+  `"serverchan": { "enabled": true, "sendkey": ["SCT账号A", "SCT账号B"] }`，脚本会逐个推送。
+  只要其中某一个账号重试后仍失败，任务退出码会变成 4（Actions 显示红叉），
+  方便你发现「只发出去一半」。
 
 **Q：Actions 报错 `EnvironmentFileNotFound: '.../environment.yml' file not found`，
 还打印一堆 ANACONDA TERMS OF SERVICE？**
