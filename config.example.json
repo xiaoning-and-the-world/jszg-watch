@@ -14,7 +14,7 @@
   },
 
   "notify": {
-    "always_notify": false,
+    "always_notify": true,
     "notify_non_focus": true,
     "recent_count": 5
   },

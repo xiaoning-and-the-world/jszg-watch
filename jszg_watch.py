@@ -104,8 +104,8 @@ DEFAULT_CONFIG = {
         "pushplus": {"enabled": False, "token": ""},
     },
     "notify": {
-        # 无任何变化时也推送一条（默认否，避免每天打扰）
-        "always_notify": False,
+        # 无任何变化时也推送一条（本项目默认开启：每天都推「最近公告」；有重点变动则推变动）
+        "always_notify": True,
         # 非重点（未命中 focus_keywords）的变更是否也推送
         "notify_non_focus": True,
         # 推送消息里附带「最近公告」的条数（按发布日期倒序，0 = 不带）
@@ -637,8 +637,9 @@ def build_report(checked_at: str, total: int, diff: dict, cfg: dict,
         if matches_keywords(i.get("title", ""), cfg["watch"].get("extra_keywords") or [])
     ]
 
+    focus_changes = focus_added + focus_changed   # 命中「重点关键词」的变动
     has_change = bool(added or changed or removed or reappeared)
-    if focus_added or focus_changed:
+    if focus_changes:
         level, headline = "critical", "浙江省教师资格认定公告有更新"
     elif has_change:
         level, headline = "info", "通知公告有更新"
@@ -728,27 +729,29 @@ def build_report(checked_at: str, total: int, diff: dict, cfg: dict,
     L.append("---")
     L.append(f"<sub>由 jszg_watch.py 自动生成 · 数据来源 [浙江省教育考试院]({cfg['watch'].get('list_url', LIST_URL)})</sub>")
 
-    # 微信推送内容：按 Markdown 组织（Server酱 的 desp、PushPlus 的 template=markdown
-    # 都是 Markdown 渲染）。要点：① 区块前后留空行；② 列表项用 "- "。
-    # 否则 Markdown 会把**单个换行折叠成空格**，整条消息挤成"一片"。
-    S = [f"**{headline}**", "", f"检查时间：{checked_at}"]
-
-    def block(title: str, lines: list[str]) -> None:
-        if lines:
-            S.extend(["", f"**{title}**", "- " + "\n- ".join(lines)])
-
-    block("⭐ 重点·新增", [f"{i['title']}（{i['date']}）" for i in focus_added[:6]])
-    block("⭐ 重点·更新", [i["title"] for i in focus_changed[:6]])
-    block(f"其他新增 {len(other_added)} 条", [i["title"] for i in other_added[:6]])
-    block(f"其他变化 {len(other_changed)} 条", [i["title"] for i in other_changed[:6]])
-    block(f"下架 {len(removed)} 条", [i["title"] for i in removed[:6]])
-    block(f"下架后重新出现 {len(reappeared)} 条", [i["title"] for i in reappeared[:6]])
-    block(f"最近公告 {len(recent)} 条", [f"{i.get('date', '')} {i['title']}" for i in recent])
-
-    if first_run:
-        S += ["", "本次为首次运行，已建立基线，明日起开始对比。"]
-    elif not has_change:
-        S += ["", "与基线一致，无需处理。"]
+    # 微信推送正文（Markdown）。Server酱 的 desp、PushPlus 的 template=markdown 都是
+    # Markdown 渲染 —— 区块之间必须留空行、列表项必须用 "- "，否则**单个换行会被折叠成
+    # 空格**，整条消息挤成"一片"。
+    #
+    # 推送规则：
+    #   ① 有命中 watch.focus_keywords（默认「教师资格认定」）的变动 → 只推这些变动的公告，
+    #      每条给出「发布时间」与「推送时间」（用文字标签区分开）；
+    #   ② 其余情况（非重点变动 / 没有任何变动）→ 一律推「最近 N 条公告」（notify.recent_count）。
+    S: list[str] = []
+    if focus_changes:
+        for idx, i in enumerate(focus_changes):
+            if idx:
+                S.append("")
+            S.append(f"**{i.get('title', '')}**")
+            S.append("")
+            S.append(f"发布时间：{i.get('date') or '未知'} ｜ 推送时间：{checked_at}")
+    else:
+        S.append(f"推送时间：{checked_at}")
+        if recent:
+            S += ["", f"**最近公告 {len(recent)} 条**",
+                  "- " + "\n- ".join(f"{i.get('date', '')} {i['title']}" for i in recent)]
+        if first_run:
+            S += ["", "本次为首次运行，已建立基线，明日起开始对比。"]
     if not IS_CI:
         S += ["", f"完整报告：{REPORT_DIR / 'latest.html'}"]
 
@@ -1206,10 +1209,10 @@ def run(args) -> int:
 
     rc = 0
     if should_push:
-        _, failed = notify(
-            cfg, f"{MONITOR_NAME}｜{report['headline']}", report["summary"],
-            dry_run=args.dry_run,
-        )
+        # 命中重点（教师资格认定）时，标题直接用「浙江省教师资格认定公告有更新」；
+        # 其余情况保留监控名前缀，便于区分。
+        title = report["headline"] if focus_hit else f"{MONITOR_NAME}｜{report['headline']}"
+        _, failed = notify(cfg, title, report["summary"], dry_run=args.dry_run)
         if failed:
             log("警告：推送渠道重试后仍失败，请检查配置或网络")
             rc = 4          # 让 Actions 变红，避免「提醒静默丢失」
