@@ -73,6 +73,8 @@ CONFIG_PATH = Path(os.environ.get("JSZG_CONFIG") or (BASE_DIR / "config.json"))
 STATE_DIR = BASE_DIR / "state"
 SNAPSHOT_PATH = STATE_DIR / "snapshot.json.gz"
 REPORT_DIR = BASE_DIR / "reports"
+# 固定名称的报告：每次覆盖、不参与 prune_reports 的按份数清理
+REPORT_KEEP = ("latest.md", "latest.html", "snapshot.md", "snapshot.html", ".gitkeep")
 LOG_DIR = BASE_DIR / "logs"
 LOG_PATH = LOG_DIR / "run.log"
 MAX_LOG_BYTES = 1_000_000    # 本地 run.log 超过约 1 MB 就截断
@@ -106,6 +108,8 @@ DEFAULT_CONFIG = {
         "always_notify": False,
         # 非重点（未命中 focus_keywords）的变更是否也推送
         "notify_non_focus": True,
+        # 推送消息里附带「最近公告」的条数（按发布日期倒序，0 = 不带）
+        "recent_count": 5,
     },
     "watch": {
         # 监控的列表页地址（换栏目/换站只改这里，不用改代码）
@@ -607,12 +611,23 @@ def split_by_focus(items: list[dict], cfg: dict) -> tuple[list[dict], list[dict]
     return hit, other
 
 
+def recent_titles(items: list[dict], count: int) -> list[dict]:
+    """按发布日期倒序取最近 count 条（日期为 YYYY-MM-DD，可直接字符串排序）。
+
+    日期为空的条目排到最后；count <= 0 时返回空列表。
+    """
+    if count <= 0:
+        return []
+    return sorted(items, key=lambda it: it.get("date") or "", reverse=True)[:count]
+
+
 # --------------------------------------------------------------------------
 # 报告
 # --------------------------------------------------------------------------
 
 def build_report(checked_at: str, total: int, diff: dict, cfg: dict,
-                 base_date: str | None, first_run: bool) -> dict:
+                 base_date: str | None, first_run: bool,
+                 recent: list[dict] | None = None) -> dict:
     added, changed, removed = diff["added"], diff["changed"], diff["removed"]
     reappeared = diff.get("reappeared") or []
     focus_added, other_added = split_by_focus(added, cfg)
@@ -727,6 +742,9 @@ def build_report(checked_at: str, total: int, diff: dict, cfg: dict,
         S += ["", f"【下架 {len(removed)} 条】"] + [f"· {i['title']}" for i in removed[:6]]
     if reappeared:
         S += ["", f"【下架后重新出现 {len(reappeared)} 条】"] + [f"· {i['title']}" for i in reappeared[:6]]
+    if recent:
+        S += ["", f"【最近公告 {len(recent)} 条】"]
+        S += [f"· {i.get('date', '')} {i['title']}" for i in recent]
     if first_run:
         S += ["", "本次为首次运行，已建立基线，明日起开始对比。"]
     elif not has_change:
@@ -1016,11 +1034,57 @@ def save_reports(report: dict, stamp: str) -> Path:
     return html_path
 
 
+def build_snapshot_listing(checked_at: str, items: list[dict], cfg: dict) -> str:
+    """生成「通知公告快照」：本轮抓到的**全部**公告标题，按发布日期倒序完整列出。
+
+    顶部给一行汇总（总数 / 日期范围 / 年份分布），下面是完整标题列表。
+    """
+    ordered = sorted(items, key=lambda it: it.get("date") or "", reverse=True)
+
+    years: dict[str, int] = {}
+    for it in ordered:
+        year = (it.get("date") or "")[:4] or "未知"
+        years[year] = years.get(year, 0) + 1
+    year_line = " / ".join(f"{y} 年 {n} 条" for y, n in sorted(years.items(), reverse=True))
+
+    dates = [it.get("date") for it in ordered if it.get("date")]
+    range_line = f"{dates[-1]} ~ {dates[0]}" if dates else "（无日期）"
+    column = cfg["watch"].get("column_name") or COLUMN_NAME
+    list_url = cfg["watch"].get("list_url", LIST_URL)
+
+    L: list[str] = []
+    L.append(f"# 通知公告快照 · {column}")
+    L.append("")
+    L.append(f"- 生成时间：{checked_at}")
+    L.append(f"- 数据来源：{list_url}")
+    L.append(f"- 公告总数：{len(ordered)}")
+    L.append(f"- 日期范围：{range_line}")
+    L.append(f"- 年份分布：{year_line or '（无）'}")
+    L.append("")
+    L.append(f"## 完整标题列表（{len(ordered)} 条，按发布日期倒序）")
+    L.append("")
+    for idx, it in enumerate(ordered, 1):
+        L.append(f"{idx}. {it.get('date') or '无日期'} · [{it.get('title', '')}]({it.get('url', '')})")
+    L.append("")
+    L.append("---")
+    L.append(f"<sub>由 jszg_watch.py 自动生成 · 数据来源 [浙江省教育考试院]({list_url})</sub>")
+    return "\n".join(L)
+
+
+def save_snapshot_listing(markdown: str) -> Path:
+    """把「通知公告快照」写进 reports/snapshot.md 与 reports/snapshot.html（每次覆盖）。"""
+    REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    (REPORT_DIR / "snapshot.md").write_text(markdown, encoding="utf-8")
+    html_path = REPORT_DIR / "snapshot.html"
+    html_path.write_text(markdown_to_html(markdown), encoding="utf-8")
+    return html_path
+
+
 def prune_reports(keep_last: int) -> None:
     if not keep_last or keep_last <= 0 or not REPORT_DIR.exists():
         return
     files = sorted(
-        (p for p in REPORT_DIR.glob("*") if p.name not in ("latest.md", "latest.html")),
+        (p for p in REPORT_DIR.glob("*") if p.name not in REPORT_KEEP),
         key=lambda p: p.name,   # 文件名即 YYYYMMDD-HHMMSS；Git 不保留 mtime，按名字排才可靠
         reverse=True,
     )
@@ -1081,6 +1145,9 @@ def run(args) -> int:
         return 3
     log(f"本次共解析到 {len(items)} 条公告{'（完整）' if complete else '（不完整）'}")
 
+    # 推送消息里附带的「最近公告」（按发布日期倒序）
+    recent = recent_titles(items, _as_int(cfg["notify"].get("recent_count"), 5))
+
     # 只对「本次新增」的公告抓正文（正文监控）；建基线时不需要抓
     work_items = work_old.get("items") or {}
     if not first_run and not args.baseline:
@@ -1092,7 +1159,8 @@ def run(args) -> int:
             "added": [], "changed": [], "removed": [], "reappeared": [],
             "missing": {}, "removed_ids": [], "confirmed_removed": set(),
         }
-        report = build_report(checked_at, len(items), diff, cfg, None, first_run=True)
+        report = build_report(checked_at, len(items), diff, cfg, None, first_run=True,
+                              recent=recent)
         log("已建立基线快照（本次不产生变更告警）")
         if not args.dry_run:
             # 用 work_old：站点更换/重建基线时不能把旧站点条目合并进来
@@ -1103,7 +1171,8 @@ def run(args) -> int:
         for aid in diff["missing"]:
             prev = work_items.get(aid, {})
             log(f"  {prev.get('title', aid)}：最近未在列表中出现（自 {diff['missing'][aid]} 起），暂不告警")
-        report = build_report(checked_at, len(items), diff, cfg, base_date, first_run=False)
+        report = build_report(checked_at, len(items), diff, cfg, base_date, first_run=False,
+                              recent=recent)
         log(
             f"对比结果：新增 {len(diff['added'])}，变化 {len(diff['changed'])}，"
             f"下架 {len(diff['removed'])}，重新出现 {len(diff['reappeared'])}"
@@ -1116,6 +1185,9 @@ def run(args) -> int:
     if not args.dry_run:
         path = save_reports(report, stamp)
         log(f"报告已保存：{path}")
+        # 通知公告快照：本轮抓到的全部标题（每次覆盖 reports/snapshot.md / .html）
+        snap_path = save_snapshot_listing(build_snapshot_listing(checked_at, items, cfg))
+        log(f"通知公告快照已保存：{snap_path}")
         prune_reports(_as_int(cfg["report"].get("keep_last"), 0))
 
     print("-" * 62)
@@ -1204,8 +1276,11 @@ def self_test() -> int:
             {"added": [], "changed": [], "removed": [], "reappeared": [],
              "missing": {}, "removed_ids": [], "confirmed_removed": set()},
             cfg, snap.get("checked_at"), first_run=False,
+            recent=recent_titles(items, _as_int(cfg["notify"].get("recent_count"), 5)),
         )
         print(f"  报告生成正常（Markdown {len(demo['markdown'])} 字符）")
+        listing = build_snapshot_listing(now_cst().strftime("%Y-%m-%d %H:%M:%S"), items, cfg)
+        print(f"  通知公告快照生成正常（{len(listing)} 字符，{len(items)} 条标题）")
     except Exception as exc:  # noqa: BLE001
         print(f"  报告生成失败：{exc}")
         return 1

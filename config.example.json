@@ -15,7 +15,8 @@
 
   "notify": {
     "always_notify": false,
-    "notify_non_focus": true
+    "notify_non_focus": true,
+    "recent_count": 5
   },
 
   "watch": {
