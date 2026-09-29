@@ -23,21 +23,22 @@
 - [三、配置项说明](#三配置项说明)
 - [四、判断逻辑与误报控制](#四判断逻辑与误报控制重要)
 - [五、常见问题](#五常见问题)
+- [六、备用定时（外部服务触发）](#六备用定时外部服务触发)
 
 ---
 
 ## 一、放到 GitHub 上跑（推荐，可以全程可视化操作）
 
 **结论先说：定时工作流需要，但只需要放一次文件，之后全在网页上点。**
-GitHub 没有「定时器」这种按钮，定时这件事本身必须由一个工作流文件（`.github/workflows/watch.yml`）
-来描述——它就是那段 `cron: "0 1 * * *"`。文件放进去以后，启停、改时间、
+GitHub 没有「定时器」这种按钮，定时这件事本身必须由一个工作流文件（`.github/workflows/jszg-watch.yml`）
+来描述——它就是那段 `cron: "47 22 * * *"`。文件放进去以后，启停、改时间、
 手动触发、看结果、看日志都能在网页上完成，不用碰命令行。
 
 ### 1. 需要哪些文件（只要 8 个）
 
 ```
 你的仓库/
-├─ .github/workflows/watch.yml    ← 定时工作流（必需，定时就靠它）
+├─ .github/workflows/jszg-watch.yml   ← 定时工作流（必需，定时就靠它）
 ├─ .github/workflows/smoke.yml    ← 改动代码时自动做冒烟测试（可选但建议）
 ├─ jszg_watch.py                  ← 主程序（必需）
 ├─ config.example.json            ← 配置模板，不含密钥（必需）
@@ -126,7 +127,7 @@ GitHub 没有「定时器」这种按钮，定时这件事本身必须由一个�
 | 立即跑一次 | `Actions → 浙江教师资格认定公告监控 → Run workflow` |
 | 测试微信通道 | 同上，勾选 **force** |
 | 重建基线 | 同上，勾选 **baseline** |
-| 改运行时间 | 打开 `.github/workflows/watch.yml` → 右上角铅笔图标 → 改 `cron` → Commit |
+| 改运行时间 | 打开 `.github/workflows/jszg-watch.yml` → 右上角铅笔图标 → 改 `cron` → Commit |
 | 暂停定时 | `Actions → 左侧选中该工作流 → 右侧 "..." → Disable workflow` |
 | 恢复定时 | 同上，`Enable workflow` |
 | 看今天的报告 | 点开仓库里的 `reports/latest.html` → 右上角 **Raw**/预览即可 |
@@ -137,22 +138,25 @@ GitHub 没有「定时器」这种按钮，定时这件事本身必须由一个�
 
 **改时间的换算**：`cron` 用的是 UTC，`北京时间 = UTC + 8`，中国全年不用夏令时。
 
-| 想在北京时间 | 填 cron |
+| 想在北京时间 | 填 cron（UTC） |
 | --- | --- |
-| 每天 09:17 | `17 1 * * *`（当前默认，刻意避开整点） |
+| 每天 06:47 | `47 22 * * *`（当前默认，刻意避开整点） |
 | 每天 08:30 | `30 0 * * *` |
 | 每天 12:00 | `0 4 * * *` |
 | 每天 09:00 和 21:00 | `0 1,13 * * *` |
 
+> **换算规则**：`cron` 用的是 UTC，**北京时间 = UTC + 8**。所以想要北京时间 06:47，
+> 要写前一天的 UTC 22:47，也就是 `47 22 * * *`。
+>
 > **别用整点分钟（`0`）**：GitHub 官方说明整点是负载最高的时候，定时任务可能被延迟，
 > 甚至被直接丢弃（"some queued jobs may be dropped"，也就是当天不跑了）。
-> 用 `17 1 * * *` 这种非整点更容易准点执行。
+> 用 `47 22 * * *` 这种非整点更容易准点执行。
 
 ### 7. 三个必须知道的 GitHub 行为
 
 1. **定时会延迟、甚至被丢弃**：高峰期可能晚几分钟到几十分钟；GitHub 官方还说明
    整点是负载高峰，队列里的定时任务**可能被直接丢弃**（当天就不跑了）。
-   所以本项目默认用非整点 `17 1 * * *`，别改成 `0 1 * * *` 这类整点。
+   所以本项目默认用非整点 `47 22 * * *`（北京时间 06:47），别改成 `0 22 * * *` 这类整点。
    这是平台调度，不是脚本问题；要精确到分钟就得自建服务器或云函数。
 2. **仓库连续 60 天没有任何活动，schedule 会被自动停用**，并给你发邮件提醒。
    本工作流每天都会 `git commit` 一次快照，所以只要它正常跑着就不会被停；
@@ -304,7 +308,7 @@ CI 里为了避免把密钥写进文件，优先用环境变量；本机也能�
 浙江省教师资格认定公告有更新          ← 通知标题
 
 浙江省2026年下半年中小学教师资格认定公告   ← 正文
-发布时间：2026-10-08 ｜ 推送时间：2026-10-08 09:17:00
+发布时间：2026-10-08 ｜ 推送时间：2026-10-08 06:47:00
 ```
 
 > **为什么要按 Markdown 排版**：正文用 `**加粗**` 当小标题、`- ` 当列表项、区块之间留空行，
@@ -340,10 +344,10 @@ A：按下面顺序查（从最常见到最少见）：
 2. **工作流是否被停用**：左侧选中后，右侧若出现 `Enable workflow` 就点它。
    仓库「连续 60 天没有任何活动」时 GitHub 会自动停用定时（本工作流每天提交快照，正常不会被停）。
 3. **工作流文件必须在默认分支上**：`schedule` 只在默认分支（一般是 `main`）生效。
-   如果 `.github/workflows/watch.yml` 传到了别的分支，定时不会触发。
+   如果 `.github/workflows/jszg-watch.yml` 传到了别的分支，定时不会触发。
 4. **Actions 是否可用 / 额度是否用完**：`Settings → Actions → General` 确认允许 Actions；
    私有仓库每月免费分钟数用完后 Actions 会停止运行（`Settings → Billing` 可查）。
-5. **是不是被整点拥堵吞掉了**：本工作流默认已改成非整点 `17 1 * * *`（北京时间 09:17）。
+5. **是不是被整点拥堵吞掉了**：本工作流默认已改成非整点 `47 22 * * *`（北京时间 06:47）。
 6. **用一次手动 `Run workflow` 交叉验证**：手动能跑通 → 脚本和权限都没问题，纯粹是调度，
    等下一次即可。
 
@@ -369,13 +373,13 @@ A：**这不是本项目的报错**，是 GitHub 自带的 Anaconda 入门模板
 `Settings` 左边的 `Code` → 进 `.github/workflows/` 目录 → 打开
 `python-package-conda.yml` → 右上角 `...` → **Delete file** → Commit。
 
-删掉后只留下 `watch.yml` 和 `smoke.yml` 两个就没问题了。
+删掉后只留下 `jszg-watch.yml` 和 `smoke.yml` 两个就没问题了。
 判断依据：本项目的工作流把代码检出到 `workspace/` 子目录，日志里的路径会带
 `/workspace/`；而那个报错路径是 `/home/runner/work/jszg-watch/jszg-watch/environment.yml`，
 正好是「没有子目录」的检出方式，说明它来自别的文件。本项目不用 conda、也不用 pip。
 
 **Q：只想要定时任务，不想要「每次提交都跑测试」。**
-A：删掉 `.github/workflows/smoke.yml` 即可，`watch.yml` 不依赖它
+A：删掉 `.github/workflows/smoke.yml` 即可，`jszg-watch.yml` 不依赖它
 （`tools/ci_smoke_test.py` 可以留着，也可以一起删）。
 
 **Q：每天都推一条「无变化」？**
@@ -405,3 +409,51 @@ A：改配置里的 `watch.list_url` 和 `watch.column_name` 即可，不用动�
 **Q：我能把快照 / 报告换成别的存储吗（比如 Gist、S3）？**
 A：可以。`load_snapshot()` / `write_snapshot()` 是唯一的读写入口，改成调用 API
 即可，其余逻辑不用动。
+
+---
+
+## 六、备用定时（外部服务触发）
+
+GitHub 的 `schedule` 是**"尽力而为"**的：会被延迟，队列忙时会被丢弃；极少数仓库/账号上
+甚至**完全不触发**——表现就是：`Actions` 里永远只有手动运行，`Event` 列从没出现过 `schedule`。
+
+这种情况**不是你文件写错了**（文件、分支、权限、Actions 开关都可以是正常的），
+继续改 cron 也没用。解决办法是：**用免费的外部定时服务调用 GitHub 的 API，
+等价于每天替你点一次「Run workflow」按钮**——它走的是 `workflow_dispatch`，
+所以**只要你能手动运行，它就一定能触发**。
+
+### 1. 生成一个 PAT（访问令牌）
+
+`GitHub 头像 → Settings → Developer settings → Personal access tokens → Fine-grained tokens → Generate new token`
+
+- **Repository access**：选 `Only select repositories` → 只勾这个监控仓库
+- **Permissions → Repository permissions → Actions**：改成 **Read and write**
+- 生成后立刻复制（形如 `github_pat_...`，**只显示一次**）
+
+### 2. 在 cron-job.org 建一个定时任务（免费）
+
+注册 <https://cron-job.org> → `Create cronjob`，按下表填写：
+
+| 字段 | 值 |
+| --- | --- |
+| Title | `jszg-watch`（随便填） |
+| URL | `https://api.github.com/repos/<用户名>/<仓库名>/actions/workflows/jszg-watch.yml/dispatches` |
+| Schedule | 每天，北京时间 **06:47** |
+| Request method | `POST` |
+| Header | `Authorization: Bearer github_pat_你的令牌` |
+| Header | `Accept: application/vnd.github+json` |
+| Request body | `{"ref":"main"}` |
+
+保存后点一次 **TEST RUN**：
+
+- 返回 **`204 No Content`** → 成功；
+- 回 `Actions` 页面刷新，会立刻多出一条运行记录（显示为 `Manually run by ...`，因为 API 触发就是 dispatch）。
+
+### 3. 几点说明
+
+- **可能重复推送**：如果同时保留 `jszg-watch.yml` 里的 `schedule`（万一哪天 GitHub 又好了）
+  又用外部定时器，同一天可能被触发两次、收到两条推送。想避免的话，把 `jszg-watch.yml` 里
+  `on.schedule` 那两行删掉，只保留一种触发方式即可。
+- **PAT 可以设置有效期**，到期前换一个即可；只勾这一个仓库、只给 Actions 权限，风险很小。
+- 如果你干脆不想要 GitHub 的定时了，把 `jszg-watch.yml` 里 `on.schedule` 那两行删掉也可以，
+  外部定时器照常工作。
